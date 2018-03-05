@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `ap_revenue` (
+CREATE TABLE IF NOT EXISTS `ap_transactions` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `ticket` INT,
     `pay_station` VARCHAR(15),
