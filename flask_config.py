@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+
+DEBUG = True
+DEVELOPMENT = True
+DB_HOST = ''
+SQLALCHEMY_DATABASE_URI = ''
+SQLALCHEMY_TRACK_MODIFICATIONS = False
