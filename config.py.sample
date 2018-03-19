@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+
+class Config(object):
+    DEBUG = True
+    DEVELOPMENT = True
+    DB_HOST = ''
+    SQLALCHEMY_DATABASE_URI = ''
+
+class ProductionConfig(Config):
+    DEVELOPMENT = False
+    DEBUG = False
+    DB_HOST = ''
+
+class Db:
+    host = ''
+    user = ''
+    pw = ''
+    name = 'pavement'

@@ -37,10 +37,10 @@ method = 31
 
 def main():
     db = MySQLdb.connect(
-        host=config.db['host'],
-        user=config.db['user'],
-        passwd=config.db['pass'],
-        db=config.db['name'])
+        host=config.Db.host,
+        user=config.Db.user,
+        passwd=config.Db.pw,
+        db=config.Db.name)
 
     #parse2016(db) needs to be updated if used again
     parse2017(db)
@@ -121,6 +121,7 @@ def parseIPS(db):
             dbRow[license_plate] = row[8]
             dbRow[transaction_type] = row[9]
             dbRow[card_type] = row[12]
+            dbRow[purchased_date] = purchased
             dbRow[expiry_date] = reorderDateTime(row[13], False)
             dbRow[revenue] = row[22]
             dbRow[method] = 'ips'
