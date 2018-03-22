@@ -31,6 +31,6 @@ CREATE TABLE IF NOT EXISTS `ap_transactions` (
     `validation_revenue` DECIMAL (10,2),
     `transaction_fee` DECIMAL (10,2),
     `card_type` VARCHAR(50),
-    `method` VARCHAR(50)
+    `method` VARCHAR(50),
      PRIMARY KEY (`id`)
 );
