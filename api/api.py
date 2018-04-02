@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import bisect, operator, pytz
 import simplejson as json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import parser, tz
 from pathlib import Path
 from flask import Flask, json, jsonify, abort, request
@@ -80,24 +80,20 @@ def get_parking_time():
     })
 
 def get_params():
-    params = request.get_json()
-    if params is None:
-        params = {}
-
-    return params
+    return {} if not request.data else request.get_json()
 
 def get_datetime_range(params):
     if 'datetime_range' not in params:
-        start_date = datetime(2016, 1, 1) # can select MIN from db later (note tz)
-        end_date = datetime(2019, 1, 1) # can select MAX from db later (note tz)
+        start_date = datetime(2016, 1, 1, tzinfo=timezone.utc) # can select MIN from db later (note tz)
+        end_date = datetime(2019, 1, 1, tzinfo=timezone.utc) # can select MAX from db later (note tz)
     else:
         if 'start' not in params['datetime_range']:
-            start_date = datetime(2016, 1, 1)
+            start_date = datetime(2016, 1, 1, tzinfo=timezone.utc)
         else:
             start_date = parser.parse(params['datetime_range']['start'])
 
         if 'end' not in params['datetime_range']:
-            end_date = datetime(2019, 1, 1)
+            end_date = datetime(2019, 1, 1, tzinfo=timezone.utc)
         else:
             end_date = parser.parse(params['datetime_range']['end'])
 
@@ -197,7 +193,7 @@ def get_bucketed_times(spaces, times):
     return bucketed_times
 
 def local_to_utc(local_dt):
-    return local_tz.localize(local_dt, is_dst=None).astimezone(pytz.utc)
+    return local_tz.localize(local_dt).astimezone(pytz.utc)
 
 def utc_to_local_stringify(utc_dt):
     return utc_dt.replace(tzinfo=pytz.utc).astimezone(local_tz).strftime('%Y-%m-%d %H:%M:%S')
