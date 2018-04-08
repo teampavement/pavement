@@ -40,8 +40,8 @@ def get_parking_revenue():
     params = get_params()
     datetime_range = get_datetime_range(params)
     filters = [
-        utc_to_local_stringify(datetime_range['start']) <= ApTransactions.purchased_date,
-        utc_to_local_stringify(datetime_range['end']) > ApTransactions.purchased_date
+        datetime_range['start'] <= ApTransactions.purchased_date,
+        datetime_range['end'] > ApTransactions.purchased_date
         ]
 
     if 'parking_spaces' in params:
@@ -101,8 +101,8 @@ def get_datetime_range(params):
 
 def get_filters(params, datetime_range):
     filters = [
-        utc_to_local_stringify(datetime_range['start']) < ApTransactions.expiry_date,
-        utc_to_local_stringify(datetime_range['end']) > ApTransactions.purchased_date
+        datetime_range['start'] < ApTransactions.expiry_date,
+        datetime_range['end'] > ApTransactions.purchased_date
         ]
 
     if 'parking_spaces' in params:
@@ -139,9 +139,6 @@ def get_bucketed_spaces(spaces, times):
         if end_time is None:
             continue
 
-        start_time = local_to_utc(start_time)
-        end_time = local_to_utc(end_time)
-
         for i in range(bisect.bisect_left(times, start_time) - 1, bisect.bisect_right(times, end_time)):
             if i < 0:
                 continue
@@ -155,7 +152,6 @@ def get_bucketed_revenue(spaces, times):
         if revenue is None:
             continue
 
-        start_time = local_to_utc(start_time)
         start_index = bisect.bisect_left(times, start_time) - 1
         bucketed_revenue[start_index] += revenue
 
@@ -168,8 +164,6 @@ def get_bucketed_times(spaces, times):
         if end_time is None:
             continue
 
-        start_time = local_to_utc(start_time)
-        end_time = local_to_utc(end_time)
         start_index = bisect.bisect_left(times, start_time) - 1
         end_index = bisect.bisect_right(times, end_time)
 
@@ -191,9 +185,3 @@ def get_bucketed_times(spaces, times):
                 bucketed_times[i] += (times[i+1] - times[i]).total_seconds()
 
     return bucketed_times
-
-def local_to_utc(local_dt):
-    return local_tz.localize(local_dt).astimezone(pytz.utc)
-
-def utc_to_local_stringify(utc_dt):
-    return utc_dt.replace(tzinfo=pytz.utc).astimezone(local_tz).strftime('%Y-%m-%d %H:%M:%S')
