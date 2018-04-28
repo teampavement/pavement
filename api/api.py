@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-import bisect, operator, pytz
+import bisect, operator, os, sys
 import simplejson as json
 from datetime import datetime, timedelta, timezone
-from dateutil import parser, tz
+from dateutil import parser
 from pathlib import Path
 from flask import Flask, json, jsonify, abort, request
 from tables import db, ApTransactions
+sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/' + '..'))
+import config
 
 app = Flask(__name__)
-app.config.from_pyfile('../flask_config.py') # TODO: load this from main config.py object instead
+app.config.from_object(os.environ['APP_SETTINGS'])
 db.init_app(app)
-local_tz = pytz.timezone('US/Eastern')
 
 @app.route('/parking-spaces', methods = ['GET'])
 def get_parking_spaces():
