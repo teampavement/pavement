@@ -21,18 +21,16 @@ def get_parking_spaces():
 def get_parking_occupancy():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = get_filters(params, datetime_range)
-    spaces = ApTransactions.query.with_entities(
-        ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
-        ).filter(*filters).all()
-    time_intervals = get_time_intervals(datetime_range)
-    bucketed_spaces = get_bucketed_spaces(spaces, time_intervals)
+    spaces = get_space_time_ranges(params, datetime_range)
+    time_intervals = get_time_intervals(datetime_range, True)
+    bucketed_occupancy = get_bucketed_occupancy(spaces, time_intervals)
+    potential_occupancy = get_potential_occupancy(params, time_intervals)
+    del time_intervals[-1]
 
     return jsonify({
         'data': [{
             'timestamp': timestamp,
-            'value': len(bucketed_spaces[i]),
-            'parking_spaces': [s for s in bucketed_spaces[i]]
+            'value': round(bucketed_occupancy[i] / potential_occupancy[i], 2),
             } for i, timestamp in enumerate(time_intervals)]
     })
 
@@ -98,13 +96,37 @@ def get_datetime_range(params):
         else:
             end_date = parser.parse(params['datetime_range']['end'])
 
-    return  {'start' : start_date, 'end': end_date}
+    return {'start' : start_date, 'end': end_date}
+
+def get_space_time_ranges(params, datetime_range):
+    filters = get_filters(params, datetime_range)
+    spaces = ApTransactions.query.with_entities(
+        ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
+        ).filter(*filters).order_by(ApTransactions.purchased_date).all()
+
+    space_time_ranges = {}
+    for id, start_time, end_time in spaces:
+        if end_time is None:
+            continue
+        if id not in space_time_ranges:
+            space_time_ranges[id] = [{'start': start_time, 'end': end_time}]
+        else:
+            if start_time < space_time_ranges[id][-1]['end']:
+                start = space_time_ranges[id][-1]['end']
+            else:
+                start = start_time
+            if end_time <= space_time_ranges[id][-1]['end']:
+                continue
+
+            space_time_ranges[id].append({'start': start, 'end': end_time})
+
+    return space_time_ranges
 
 def get_filters(params, datetime_range):
     filters = [
         datetime_range['start'] < ApTransactions.expiry_date,
         datetime_range['end'] > ApTransactions.purchased_date
-        ]
+    ]
 
     if 'parking_spaces' in params:
         filters.append(ApTransactions.stall.in_(params['parking_spaces']))
@@ -147,6 +169,34 @@ def get_bucketed_spaces(spaces, times):
 
     return bucketed_spaces
 
+def get_bucketed_occupancy(spaces, time_intervals):
+    bucketed_occupancy = [0] * (len(time_intervals) - 1)
+
+    for id, transactions in spaces.items():
+        data = get_time_data(
+            transactions[0]['start'], # first transaction
+            transactions[-1]['end'], # last transaction
+            time_intervals
+        )
+
+        start_time = data['start_time']
+        end_time = data['end_time']
+
+        for i in range(data['start_index'], data['end_index']):
+            for transaction in transactions:
+                if transaction['start'] < time_intervals[i]:
+                    data['start_time'] = time_intervals[i]
+                else:
+                    data['start_time'] = transaction['start']
+                if transaction['end'] > time_intervals[i+1]:
+                    data['end_time'] = time_intervals[i+1]
+                else:
+                    data['end_time'] = transaction['end']
+
+                bucketed_occupancy[i] += get_time_occupied(i, data, time_intervals)
+
+    return bucketed_occupancy
+
 def get_bucketed_revenue(spaces, times):
     bucketed_revenue = [0] * len(times)
     for id, start_time, revenue in spaces:
@@ -165,24 +215,49 @@ def get_bucketed_times(spaces, times):
         if end_time is None:
             continue
 
-        start_index = bisect.bisect_left(times, start_time) - 1
-        end_index = bisect.bisect_right(times, end_time)
-
-        if start_index < 0:
-            start_index = 0
-            start_time = times[start_index]
-        if end_index == len(times):
-            end_index = end_index - 1
-            end_time = times[end_index]
-
-        for i in range(start_index, end_index):
-            if (start_index) == (end_index - 1):
-                bucketed_times[i] += (end_time - start_time).total_seconds()
-            elif i == start_index:
-                bucketed_times[i] += (times[i+1] - start_time).total_seconds()
-            elif i == (end_index - 1):
-                bucketed_times[i] += (end_time - times[i]).total_seconds()
-            else:
-                bucketed_times[i] += (times[i+1] - times[i]).total_seconds()
+        data = get_time_data(start_time, end_time, times)
+        for i in range(data['start_index'], data['end_index']):
+            bucketed_times[i] += get_time_occupied(i, data, times)
 
     return bucketed_times
+
+def get_time_data(start_time, end_time, times):
+    start_index = bisect.bisect_left(times, start_time) - 1
+    end_index = bisect.bisect_right(times, end_time)
+    data = {
+        'start_time': start_time, 'end_time': end_time,
+        'start_index': start_index, 'end_index': end_index
+    }
+
+    if start_index < 0:
+        data['start_index'] = 0
+        data['start_time'] = times[data['start_index']]
+    if end_index == len(times):
+        data['end_index'] = end_index - 1
+        data['end_time'] = times[data['end_index']]
+
+    return data
+
+def get_time_occupied(i, time_data, times):
+    if time_data['start_index'] == (time_data['end_index'] - 1):
+        return (time_data['end_time'] - time_data['start_time']).total_seconds()
+    elif i == time_data['start_index']:
+        return (times[i+1] - time_data['start_time']).total_seconds()
+    elif i == (time_data['end_index'] - 1):
+        return (time_data['end_time'] - times[i]).total_seconds()
+    else:
+        return (times[i+1] - times[i]).total_seconds()
+
+def get_potential_occupancy(params, times):
+    potential_occupancy = [0] * (len(times) - 1)
+    if 'parking_spaces' in params:
+        space_count = len(params['parking_spaces'])
+    else:
+        space_count = len(ApTransactions.query.with_entities(ApTransactions.stall)
+                          .distinct(ApTransactions.stall).all())
+    for i, time in enumerate(times):
+        if i == len(times) - 1:
+            break
+        potential_occupancy[i] = (times[i+1] - time).total_seconds() * space_count
+
+    return potential_occupancy
