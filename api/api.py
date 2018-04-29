@@ -74,8 +74,8 @@ def get_parking_time():
     return jsonify({
         'data': [{
             'timestamp': timestamp,
-            'value': bucketed_times[i],
-            } for i, timestamp in enumerate(time_intervals)]
+            'value': round(bucketed_times[i] / len(spaces), 2),
+        } for i, timestamp in enumerate(time_intervals)]
     })
 
 def get_params():
