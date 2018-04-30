@@ -32,7 +32,7 @@ def get_parking_occupancy():
     if heatmap:
         return get_occupancy(transactions, datetime_range, params)
     else:
-        return get_bucketed_occupancy(transactions, time_intervals)
+        return get_bucketed_occupancy(transactions, time_intervals, params)
 
 @app.route('/parking-revenue', methods = ['POST'])
 def get_parking_revenue():
@@ -209,7 +209,7 @@ def get_occupancy(spaces, datetime_range, params):
 
     return jsonify(occupancy)
 
-def get_bucketed_occupancy(spaces, time_intervals):
+def get_bucketed_occupancy(spaces, time_intervals, params):
     bucketed_occupancy = [0] * (len(time_intervals) - 1)
 
     for id, transactions in spaces.items():
@@ -242,7 +242,7 @@ def get_bucketed_occupancy(spaces, time_intervals):
 
                 bucketed_occupancy[i] += get_time_occupied(i, data, time_intervals)
 
-    potential_occupancy = get_potential_occupancy(spaces, time_intervals)
+    potential_occupancy = get_potential_occupancy(params, time_intervals)
     del time_intervals[-1]
 
     return jsonify({
