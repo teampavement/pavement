@@ -295,8 +295,8 @@ def get_times(spaces, datetime_range, params):
                 else:
                     unused_spaces += 1
 
-            curb_time = round(curb_time / (len(curb) - unused_spaces), 2)
-            times['data'].append({'value': curb_time, 'space': curb})
+            curb_time = curb_time / (len(curb) - unused_spaces)
+            times['data'].append({'value': seconds_to_hours(curb_time), 'space': curb})
     else:
         keyed_spaces = {}
         for id, start_time, end_time in spaces:
@@ -316,8 +316,8 @@ def get_times(spaces, datetime_range, params):
             for transaction in transactions:
                 space_time += (transaction['end'] - transaction['start']).total_seconds()
 
-            space_time = round(space_time / len(transactions), 2)
-            times['data'].append({'value': space_time, 'space': id})
+            space_time = space_time / len(transactions)
+            times['data'].append({'value': seconds_to_hours(space_time), 'space': id})
 
         if 'parking_spaces' in params:
             for space in params['parking_spaces']:
@@ -436,3 +436,6 @@ def get_bound_time_range(transaction, datetime_range):
         end_time = transaction['end']
 
     return {'start': start_time, 'end': end_time}
+
+def seconds_to_hours(seconds):
+    return round(seconds / 3600, 2)
