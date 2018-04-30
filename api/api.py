@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import bisect, operator, os, sys
 import simplejson as json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from dateutil import parser
 from pathlib import Path
 from flask import Flask, json, jsonify, abort, request
@@ -12,6 +12,9 @@ import config
 app = Flask(__name__)
 app.config.from_object(os.environ['APP_SETTINGS'])
 db.init_app(app)
+
+off_hours_start = time(6, 0, tzinfo=timezone.utc)
+off_hours_end = time(13, 0, tzinfo=timezone.utc)
 
 @app.route('/parking-spaces', methods = ['GET'])
 def get_parking_spaces():
@@ -24,7 +27,7 @@ def get_parking_occupancy():
     filters = get_filters(params, datetime_range)
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
-        ).filter(*filters).all()
+        ).filter(*filters).order_by(ApTransactions.purchased_date).all()
     transactions = get_squashed_transactions(spaces, datetime_range)
     time_intervals = get_time_intervals(datetime_range, True)
 
@@ -146,6 +149,10 @@ def generate_times(datetime_range, delta, include_end):
     curr = datetime_range['start']
     op = operator.le if include_end else operator.lt
     while op(curr, datetime_range['end']):
+        if curr.timetz() >= off_hours_start and curr.timetz() < off_hours_end:
+            curr += delta
+            continue
+
         times.append(curr)
         curr += delta
 
@@ -175,7 +182,7 @@ def get_occupancy(spaces, datetime_range, params):
         for curb in params['parking_spaces']:
             curb_time = 0
             potential_curb_time = len(curb) \
-                * (datetime_range['end'] - datetime_range['start']).total_seconds()
+                * get_potential_occupancy(datetime_range['start'], datetime_range['end'])
 
             for space in curb:
                 space_time = 0
@@ -183,6 +190,8 @@ def get_occupancy(spaces, datetime_range, params):
                 if space in spaces:
                     for transaction in spaces[space]:
                         time_range = get_bound_time_range(transaction, datetime_range)
+                        if not time_range:
+                            continue
                         space_time += (time_range['end'] - time_range['start']).total_seconds()
 
                 curb_time += space_time
@@ -190,17 +199,19 @@ def get_occupancy(spaces, datetime_range, params):
             curb_occupancy = round(curb_time / potential_curb_time, 2)
             occupancy['data'].append({'value': curb_occupancy, 'space': curb})
     else:
-        potential_time = (datetime_range['end'] - datetime_range['start']).total_seconds()
+        potential_time = get_potential_occupancy(datetime_range['start'], datetime_range['end'])
 
         for id, transactions in spaces.items():
-            time = 0
+            space_time = 0
 
             for transaction in transactions:
                 time_range = get_bound_time_range(transaction, datetime_range)
-                time += (time_range['end'] - time_range['start']).total_seconds()
+                if not time_range:
+                    continue
+                space_time += (time_range['end'] - time_range['start']).total_seconds()
 
-            time = round(time / potential_time, 2)
-            occupancy['data'].append({'value': time, 'space': id})
+            space_time = round(space_time / potential_time, 2)
+            occupancy['data'].append({'value': space_time, 'space': id})
 
         if 'parking_spaces' in params:
             for space in params['parking_spaces']:
@@ -242,7 +253,7 @@ def get_bucketed_occupancy(spaces, time_intervals, params):
 
                 bucketed_occupancy[i] += get_time_occupied(i, data, time_intervals)
 
-    potential_occupancy = get_potential_occupancy(params, time_intervals)
+    potential_occupancy = get_potential_occupancy_bucketed(params, time_intervals)
     del time_intervals[-1]
 
     return jsonify({
@@ -277,8 +288,8 @@ def get_times(spaces, datetime_range, params):
 
                 if space in spaces:
                     for transaction in spaces[space]:
-                        time = get_bound_time_range(transaction, datetime_range)
-                        space_time += (time['end'] - time['start']).total_seconds()
+                        bound_range = get_bound_time_range(transaction, datetime_range)
+                        space_time += (bound_range['end'] - bound_range['start']).total_seconds()
 
                     curb_time += space_time / len(spaces[space])
                 else:
@@ -293,20 +304,20 @@ def get_times(spaces, datetime_range, params):
                 continue
 
             transaction = {'start': start_time, 'end': end_time}
-            time = get_bound_time_range(transaction, datetime_range)
+            bound_range = get_bound_time_range(transaction, datetime_range)
 
             if id not in keyed_spaces:
-                keyed_spaces[id] = [{'start': time['start'], 'end': time['end']}]
+                keyed_spaces[id] = [{'start': bound_range['start'], 'end': bound_range['end']}]
             else:
-                keyed_spaces[id].append({'start': time['start'], 'end': time['end']})
+                keyed_spaces[id].append({'start': bound_range['start'], 'end': bound_range['end']})
 
         for id, transactions in keyed_spaces.items():
-            time = 0
+            space_time = 0
             for transaction in transactions:
-                time += (transaction['end'] - transaction['start']).total_seconds()
+                space_time += (transaction['end'] - transaction['start']).total_seconds()
 
-            time = round(time / len(transactions), 2)
-            times['data'].append({'value': time, 'space': id})
+            space_time = round(space_time / len(transactions), 2)
+            times['data'].append({'value': space_time, 'space': id})
 
         if 'parking_spaces' in params:
             for space in params['parking_spaces']:
@@ -363,19 +374,34 @@ def get_time_occupied(i, time_data, times):
     else:
         return (times[i+1] - times[i]).total_seconds()
 
-def get_potential_occupancy(params, times):
-    potential_occupancy = [0] * (len(times) - 1)
+def get_potential_occupancy_bucketed(params, time_intervals):
+    potential_occupancy = [0] * (len(time_intervals) - 1)
     if 'parking_spaces' in params:
         space_count = len(params['parking_spaces'])
     else:
         space_count = len(ApTransactions.query.with_entities(ApTransactions.stall)
                           .distinct(ApTransactions.stall).all())
-    for i, time in enumerate(times):
-        if i == len(times) - 1:
+    for i, interval in enumerate(time_intervals):
+        if i == len(time_intervals) - 1:
             break
-        potential_occupancy[i] = (times[i+1] - time).total_seconds() * space_count
+
+        potential_occupancy[i] = space_count \
+            * get_potential_occupancy(interval, time_intervals[i+1])
 
     return potential_occupancy
+
+def get_potential_occupancy(start_time, end_time):
+    seconds = 0
+    delta = timedelta(seconds=1)
+    curr = start_time
+
+    while curr < end_time:
+        curr += delta
+        if curr.timetz() >= off_hours_start and curr.timetz() < off_hours_end:
+            continue
+        seconds += 1
+
+    return seconds
 
 def get_keyed_spaces(spaces):
     keyed_spaces = {}
@@ -395,6 +421,11 @@ def is_curbs(spaces):
     return isinstance(spaces[0], list)
 
 def get_bound_time_range(transaction, datetime_range):
+    if (transaction['start'] > datetime_range['end']
+        or transaction['end'] < datetime_range['start']):
+        # this could happen when receiving squashed transactions
+        return False
+
     if transaction['start'] < datetime_range['start']:
         start_time = datetime_range['start']
     else:
