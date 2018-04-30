@@ -270,17 +270,21 @@ def get_times(spaces, datetime_range, params):
         spaces = get_keyed_spaces(spaces)
         for curb in params['parking_spaces']:
             curb_time = 0
+            unused_spaces = 0
 
             for space in curb:
                 space_time = 0
 
-                for transaction in spaces[space]:
-                    time = get_bound_time_range(transaction, datetime_range)
-                    space_time += (time['end'] - time['start']).total_seconds()
+                if space in spaces:
+                    for transaction in spaces[space]:
+                        time = get_bound_time_range(transaction, datetime_range)
+                        space_time += (time['end'] - time['start']).total_seconds()
 
-                curb_time += space_time / len(spaces[space])
+                    curb_time += space_time / len(spaces[space])
+                else:
+                    unused_spaces += 1
 
-            curb_time = round(curb_time / len(curb), 2)
+            curb_time = round(curb_time / (len(curb) - unused_spaces), 2)
             times['data'].append({'value': curb_time, 'space': curb})
     else:
         keyed_spaces = {}
@@ -303,6 +307,11 @@ def get_times(spaces, datetime_range, params):
 
             time = round(time / len(transactions), 2)
             times['data'].append({'value': time, 'space': id})
+
+        if 'parking_spaces' in params:
+            for space in params['parking_spaces']:
+                if space not in keyed_spaces:
+                    times['data'].append({'value': 0, 'space': space})
 
     return jsonify(times)
 
