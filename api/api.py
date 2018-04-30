@@ -21,18 +21,18 @@ def get_parking_spaces():
 def get_parking_occupancy():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    spaces = get_space_time_ranges(params, datetime_range)
+    filters = get_filters(params, datetime_range)
+    spaces = ApTransactions.query.with_entities(
+        ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
+        ).filter(*filters).all()
+    transactions = get_squashed_transactions(spaces, datetime_range)
     time_intervals = get_time_intervals(datetime_range, True)
-    bucketed_occupancy = get_bucketed_occupancy(spaces, time_intervals)
-    potential_occupancy = get_potential_occupancy(params, time_intervals)
-    del time_intervals[-1]
 
-    return jsonify({
-        'data': [{
-            'timestamp': timestamp,
-            'value': round(bucketed_occupancy[i] / potential_occupancy[i], 2),
-            } for i, timestamp in enumerate(time_intervals)]
-    })
+    heatmap = request.args.get('heatmap', default = False)
+    if heatmap:
+        return get_occupancy(transactions, datetime_range, params)
+    else:
+        return get_bucketed_occupancy(transactions, time_intervals)
 
 @app.route('/parking-revenue', methods = ['POST'])
 def get_parking_revenue():
@@ -41,7 +41,7 @@ def get_parking_revenue():
     filters = [
         datetime_range['start'] <= ApTransactions.purchased_date,
         datetime_range['end'] > ApTransactions.purchased_date
-        ]
+    ]
 
     if 'parking_spaces' in params:
         filters.append(ApTransactions.stall.in_(params['parking_spaces']))
@@ -94,29 +94,25 @@ def get_datetime_range(params):
 
     return {'start' : start_date, 'end': end_date}
 
-def get_space_time_ranges(params, datetime_range):
-    filters = get_filters(params, datetime_range)
-    spaces = ApTransactions.query.with_entities(
-        ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
-        ).filter(*filters).order_by(ApTransactions.purchased_date).all()
-
-    space_time_ranges = {}
+def get_squashed_transactions(spaces, datetime_range):
+    # get all transactions and remove overlapping time ranges
+    transactions = {}
     for id, start_time, end_time in spaces:
         if end_time is None:
             continue
-        if id not in space_time_ranges:
-            space_time_ranges[id] = [{'start': start_time, 'end': end_time}]
+        if id not in transactions:
+            transactions[id] = [{'start': start_time, 'end': end_time}]
         else:
-            if start_time < space_time_ranges[id][-1]['end']:
-                start = space_time_ranges[id][-1]['end']
+            if start_time < transactions[id][-1]['end']:
+                start = transactions[id][-1]['end']
             else:
                 start = start_time
-            if end_time <= space_time_ranges[id][-1]['end']:
+            if end_time <= transactions[id][-1]['end']:
                 continue
 
-            space_time_ranges[id].append({'start': start, 'end': end_time})
+            transactions[id].append({'start': start, 'end': end_time})
 
-    return space_time_ranges
+    return transactions
 
 def get_filters(params, datetime_range):
     filters = [
@@ -172,6 +168,47 @@ def get_bucketed_spaces(spaces, times):
 
     return bucketed_spaces
 
+def get_occupancy(spaces, datetime_range, params):
+    occupancy = {'data': []}
+
+    if 'parking_spaces' in params and is_curbs(params['parking_spaces']):
+        for curb in params['parking_spaces']:
+            curb_time = 0
+            potential_curb_time = len(curb) \
+                * (datetime_range['end'] - datetime_range['start']).total_seconds()
+
+            for space in curb:
+                space_time = 0
+
+                if space in spaces:
+                    for transaction in spaces[space]:
+                        time_range = get_bound_time_range(transaction, datetime_range)
+                        space_time += (time_range['end'] - time_range['start']).total_seconds()
+
+                curb_time += space_time
+
+            curb_occupancy = round(curb_time / potential_curb_time, 2)
+            occupancy['data'].append({'value': curb_occupancy, 'space': curb})
+    else:
+        potential_time = (datetime_range['end'] - datetime_range['start']).total_seconds()
+
+        for id, transactions in spaces.items():
+            time = 0
+
+            for transaction in transactions:
+                time_range = get_bound_time_range(transaction, datetime_range)
+                time += (time_range['end'] - time_range['start']).total_seconds()
+
+            time = round(time / potential_time, 2)
+            occupancy['data'].append({'value': time, 'space': id})
+
+        if 'parking_spaces' in params:
+            for space in params['parking_spaces']:
+                if space not in spaces:
+                    occupancy['data'].append({'value': 0, 'space': space})
+
+    return jsonify(occupancy)
+
 def get_bucketed_occupancy(spaces, time_intervals):
     bucketed_occupancy = [0] * (len(time_intervals) - 1)
 
@@ -205,7 +242,15 @@ def get_bucketed_occupancy(spaces, time_intervals):
 
                 bucketed_occupancy[i] += get_time_occupied(i, data, time_intervals)
 
-    return bucketed_occupancy
+    potential_occupancy = get_potential_occupancy(spaces, time_intervals)
+    del time_intervals[-1]
+
+    return jsonify({
+        'data': [{
+            'timestamp': timestamp,
+            'value': round(bucketed_occupancy[i] / potential_occupancy[i], 2),
+            } for i, timestamp in enumerate(time_intervals)]
+    })
 
 def get_bucketed_revenue(spaces, times):
     bucketed_revenue = [0] * len(times)
