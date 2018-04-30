@@ -188,6 +188,12 @@ def get_bucketed_occupancy(spaces, time_intervals):
                     or transaction['end'] < time_intervals[i]):
                     continue
 
+                data = get_time_data(
+                    transaction['start'],
+                    transaction['end'],
+                    time_intervals
+                )
+
                 if transaction['start'] < time_intervals[i]:
                     data['start_time'] = time_intervals[i]
                 else:
