@@ -270,6 +270,8 @@ def get_bucketed_revenue(spaces, times):
             continue
 
         start_index = bisect.bisect_left(times, start_time) - 1
+        if start_index < 0:
+            continue
         bucketed_revenue[start_index] += revenue
 
     return bucketed_revenue
