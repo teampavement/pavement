@@ -41,14 +41,7 @@ def get_parking_occupancy():
 def get_parking_revenue():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = [
-        datetime_range['start'] <= ApTransactions.purchased_date,
-        datetime_range['end'] > ApTransactions.purchased_date
-    ]
-
-    if 'parking_spaces' in params:
-        filters.append(ApTransactions.stall.in_(params['parking_spaces']))
-
+    filters = get_filters(params, datetime_range, True)
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.revenue
         ).filter(*filters).all()
@@ -66,7 +59,7 @@ def get_parking_revenue():
 def get_parking_time():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = get_filters(params, datetime_range)
+    filters = get_filters(params, datetime_range, True)
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
         ).filter(*filters).all()
@@ -117,11 +110,17 @@ def get_squashed_transactions(spaces, datetime_range):
 
     return transactions
 
-def get_filters(params, datetime_range):
-    filters = [
-        datetime_range['start'] < ApTransactions.expiry_date,
-        datetime_range['end'] > ApTransactions.purchased_date
-    ]
+def get_filters(params, datetime_range, only_check_start = False):
+    if only_check_start:
+        filters = [
+            datetime_range['start'] <= ApTransactions.purchased_date,
+            datetime_range['end'] > ApTransactions.purchased_date
+        ]
+    else:
+        filters = [
+            datetime_range['start'] < ApTransactions.expiry_date,
+            datetime_range['end'] > ApTransactions.purchased_date
+        ]
 
     if 'parking_spaces' in params:
         if is_curbs(params['parking_spaces']):
@@ -292,8 +291,7 @@ def get_times(spaces, datetime_range, params):
 
                 if space in spaces:
                     for transaction in spaces[space]:
-                        bound_range = get_bound_time_range(transaction, datetime_range)
-                        space_time += (bound_range['end'] - bound_range['start']).total_seconds()
+                        space_time += (transaction['end'] - transaction['start']).total_seconds()
 
                     curb_time += space_time / len(spaces[space])
                 else:
@@ -307,13 +305,10 @@ def get_times(spaces, datetime_range, params):
             if end_time is None:
                 continue
 
-            transaction = {'start': start_time, 'end': end_time}
-            bound_range = get_bound_time_range(transaction, datetime_range)
-
             if id not in keyed_spaces:
-                keyed_spaces[id] = [{'start': bound_range['start'], 'end': bound_range['end']}]
+                keyed_spaces[id] = [{'start': start_time, 'end': end_time}]
             else:
-                keyed_spaces[id].append({'start': bound_range['start'], 'end': bound_range['end']})
+                keyed_spaces[id].append({'start': start_time, 'end': end_time})
 
         for id, transactions in keyed_spaces.items():
             space_time = 0
@@ -331,23 +326,31 @@ def get_times(spaces, datetime_range, params):
     return jsonify(times)
 
 def get_bucketed_times(spaces, datetime_range):
-    time_intervals = get_time_intervals(datetime_range, True)
-    bucketed_times = [0] * (len(time_intervals) - 1)
+    time_intervals = get_time_intervals(datetime_range)
+    bucketed_times = [0] * (len(time_intervals))
+    bucketed_spaces = [0] * (len(time_intervals))
 
     for id, start_time, end_time in spaces:
-        if end_time is None:
+        if (end_time is None
+            or (start_time.timetz() >= off_hours_start
+                and start_time.timetz() < off_hours_end)):
             continue
 
-        data = get_time_data(start_time, end_time, time_intervals)
-        for i in range(data['start_index'], data['end_index']):
-            bucketed_times[i] += get_time_occupied(i, data, time_intervals)
+        start_index = bisect.bisect_left(time_intervals, start_time) - 1
+        if start_index < 0:
+            continue
 
-    del time_intervals[-1]
+        bucketed_times[start_index] += (end_time - start_time).total_seconds()
+        bucketed_spaces[start_index] += 1
+
+    for i, space in enumerate(bucketed_spaces):
+        if space == 0:
+            bucketed_spaces[i] += 1
 
     return jsonify({
         'data': [{
             'timestamp': timestamp,
-            'value': seconds_to_hours(bucketed_times[i] / len(spaces)),
+            'value': seconds_to_hours(bucketed_times[i] / bucketed_spaces[i]),
         } for i, timestamp in enumerate(time_intervals)]
     })
 
