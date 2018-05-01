@@ -347,7 +347,7 @@ def get_bucketed_times(spaces, datetime_range):
     return jsonify({
         'data': [{
             'timestamp': timestamp,
-            'value': round(bucketed_times[i] / len(spaces), 2),
+            'value': seconds_to_hours(bucketed_times[i] / len(spaces)),
         } for i, timestamp in enumerate(time_intervals)]
     })
 
