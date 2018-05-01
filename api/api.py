@@ -266,7 +266,9 @@ def get_bucketed_occupancy(spaces, time_intervals, params):
 def get_bucketed_revenue(spaces, times):
     bucketed_revenue = [0] * len(times)
     for id, start_time, revenue in spaces:
-        if revenue is None:
+        if (revenue is None
+            or (start_time.timetz() >= off_hours_start
+                and start_time.timetz() < off_hours_end)):
             continue
 
         start_index = bisect.bisect_left(times, start_time) - 1
