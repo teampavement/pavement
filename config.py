@@ -6,11 +6,11 @@ class Config(object):
     DEBUG = False
     TESTING = False
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URI')
 
 class LocalConfig(Config):
     DEBUG = True
     DEVELOPMENT = True
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URI')
 
 class ProductionConfig(Config):
     DEVELOPMENT = False
