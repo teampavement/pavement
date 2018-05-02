@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 import bisect, operator, os, sys
-import simplejson as json
 from datetime import datetime, timedelta, timezone, time
 from dateutil import parser
 from pathlib import Path
 from flask import Flask, json, jsonify, abort, request
-from tables import db, ApTransactions
+from api import tables
 sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/' + '..'))
 import config
 
 app = Flask(__name__)
 app.config.from_object(os.environ['APP_SETTINGS'])
-db.init_app(app)
+tables.db.init_app(app)
+ApTransactions = tables.ApTransactions
 
 off_hours_start = time(6, 0, tzinfo=timezone.utc)
 off_hours_end = time(13, 0, tzinfo=timezone.utc)
@@ -446,3 +446,6 @@ def get_bound_time_range(transaction, datetime_range):
 
 def seconds_to_hours(seconds):
     return round(seconds / 3600, 2)
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0')
