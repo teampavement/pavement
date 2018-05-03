@@ -1,6 +1,6 @@
-autoenv==1.0.0
 click==6.7
 Flask==0.12.2
+Flask-Cors==3.0.4
 Flask-SQLAlchemy==2.3.2
 itsdangerous==0.24
 Jinja2==2.10

@@ -4,11 +4,13 @@ from datetime import datetime, timedelta, timezone, time
 from dateutil import parser
 from pathlib import Path
 from flask import Flask, json, jsonify, abort, request
+from flask_cors import CORS
 from api import tables
 sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/' + '..'))
 import config
 
 app = Flask(__name__)
+cors = CORS(app, resources={r"/*": {"origins": "*"}})
 app.config.from_object(os.environ['APP_SETTINGS'])
 tables.db.init_app(app)
 ApTransactions = tables.ApTransactions
