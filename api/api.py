@@ -15,6 +15,8 @@ ApTransactions = tables.ApTransactions
 
 off_hours_start = time(6, 0, tzinfo=timezone.utc)
 off_hours_end = time(13, 0, tzinfo=timezone.utc)
+cached_time = 0
+cached_interval = 0
 
 @app.route('/parking-spaces', methods = ['GET'])
 def get_parking_spaces():
@@ -398,16 +400,24 @@ def get_potential_occupancy_bucketed(params, time_intervals):
     return potential_occupancy
 
 def get_potential_occupancy(start_time, end_time):
+    global cached_time
+    global cached_interval
+
+    if cached_interval > 0 and (end_time - start_time).total_seconds() == cached_interval:
+        return cached_time
+
     seconds = 0
     delta = timedelta(seconds=1)
     curr = start_time
 
     while curr < end_time:
         curr += delta
-        if curr.timetz() >= off_hours_start and curr.timetz() < off_hours_end:
-            continue
+        if curr.timetz() == off_hours_start:
+            curr += timedelta(hours=7)
         seconds += 1
 
+    cached_time = seconds
+    cached_interval = (end_time - start_time).total_seconds()
     return seconds
 
 def get_keyed_spaces(spaces):
