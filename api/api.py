@@ -388,8 +388,9 @@ def get_potential_occupancy_bucketed(params, time_intervals):
     if 'parking_spaces' in params:
         space_count = len(params['parking_spaces'])
     else:
-        space_count = len(ApTransactions.query.with_entities(ApTransactions.stall)
-                          .distinct(ApTransactions.stall).all())
+        # slowish query we can worry about optimizing later when we get more data
+        space_count = 3693
+
     for i, interval in enumerate(time_intervals):
         if i == len(time_intervals) - 1:
             break
