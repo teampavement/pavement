@@ -17,10 +17,10 @@ class ProductionConfig(Config):
     DEBUG = False
 
 class Db:
-    host = 'localhost'
-    user = 'pavement'
-    pw = ''
-    name = 'pavement'
+    host = os.getenv('DB_HOST')
+    user = os.getenv('DB_USER')
+    pw = os.getenv('DB_PASS')
+    name = os.getenv('DB_NAME')
 
 class DbRead:
     host = ''
