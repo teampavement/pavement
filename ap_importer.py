@@ -43,6 +43,7 @@ def main():
 
     parse_2016(db)
     parse_2017(db)
+    parse_2018(db)
 
 def parse_2016(db):
     cursor = db.cursor()
@@ -85,15 +86,20 @@ def parse_2016(db):
     cursor.close()
 
 def parse_2017(db):
-    parse_app(db)
-    parse_ips(db)
-    parse_its(db)
+    parse_app(db, '2017_App_Transaction_Report.csv')
+    parse_ips(db, '2017_IPSGroup_Transaction_Report.csv')
+    parse_its_2017(db, '2017_ITS*.csv')
 
-def parse_app(db):
+def parse_2018(db):
+    #parse_app(db, '2018_App_Transaction_Report_Jan-April.csv')
+    parse_ips(db, 'IPS_Transactions_Jan-Apr2018.csv')
+    parse_its_2018(db, '2017_ITS*.csv')
+
+def parse_app(db, file):
     cursor = db.cursor()
 
-    print('Parsing 2017 App data...\n')
-    with open('2017_App_Transaction_Report.csv') as f:
+    print('Parsing App data for ' + file + '...\n')
+    with open(file) as f:
         reader = csv.reader(f)
         next(reader)
         for row in reader:
@@ -132,11 +138,11 @@ def parse_app(db):
     db.commit()
     cursor.close()
 
-def parse_ips(db):
+def parse_ips(db, file):
     cursor = db.cursor()
 
-    print('Parsing 2017 IPS data...\n')
-    with open('2017_IPSGroup_Transaction_Report.csv') as f:
+    print('Parsing IPS data for ' + file + '...\n')
+    with open(file) as f:
         reader = csv.reader(f)
         next(reader)
         for row in reader:
@@ -169,39 +175,44 @@ def parse_ips(db):
     db.commit()
     cursor.close()
 
-def parse_its(db):
+def parse_its_2017(db, files):
+    for itsFile in glob.glob(files):
+        parse_its(db, itsFile)
+
+def parse_its_2018(db, file):
+    parse_its(db, 'ITS Transactions 2018.csv')
+
+def parse_its(db, file):
     cursor = db.cursor()
+    print('Parsing ITS data for ' + file + '...\n')
+    with open (file) as f:
+        reader = csv.reader(f)
+        next(reader)
+        for row in reader:
+            row = strip_currencies(strip_na(row), 9, 14)
+            purchased = get_date_time(row[4])
+            expired = get_date_time(row[5])
 
-    for itsFile in glob.glob('2017_ITS*.csv'):
-        print('Parsing ' + itsFile + '...\n')
-        with open (itsFile) as f:
-            reader = csv.reader(f)
-            next(reader)
-            for row in reader:
-                row = strip_currencies(strip_na(row), 9, 14)
-                purchased = get_date_time(row[4])
-                expired = get_date_time(row[5])
+            dbRow = [row[0], row[1], row[2], row[3], purchased, expired,
+            row[6], row[7], row[8], row[9], row[10], row[11], row[12],
+            row[13], row[14]]
+            dbRow.extend([None] * 13)
+            dbRow.append('its')
 
-                dbRow = [row[0], row[1], row[2], row[3], purchased, expired,
-                row[6], row[7], row[8], row[9], row[10], row[11], row[12],
-                row[13], row[14]]
-                dbRow.extend([None] * 13)
-                dbRow.append('its')
-
-                cursor.execute("""INSERT INTO ap_transactions
-                        (ticket, pay_station, stall, license_plate,
-                        purchased_date, expiry_date, payment_type,
-                        transaction_type, coupon_code, excess_payment,
-                        change_issued, refund_ticket, total_collections,
-                        revenue, rate_name, hours_paid, zone, new_rate_weekday,
-                        new_revenue_weekday, new_rate_weekend,
-                        new_revenue_weekend, passport_tran, merchant_tran,
-                        parker_id, conv_revenue, validation_revenue,
-                        transaction_fee, card_type, method)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s)""",
-                        dbRow)
+            cursor.execute("""INSERT INTO ap_transactions
+                    (ticket, pay_station, stall, license_plate,
+                    purchased_date, expiry_date, payment_type,
+                    transaction_type, coupon_code, excess_payment,
+                    change_issued, refund_ticket, total_collections,
+                    revenue, rate_name, hours_paid, zone, new_rate_weekday,
+                    new_revenue_weekday, new_rate_weekend,
+                    new_revenue_weekend, passport_tran, merchant_tran,
+                    parker_id, conv_revenue, validation_revenue,
+                    transaction_fee, card_type, method)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s)""",
+                    dbRow)
 
     db.commit()
     cursor.close()
