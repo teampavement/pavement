@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import bisect, operator, os, sys
+import bisect, operator, os, sys, psycopg2
 from datetime import datetime, timedelta, timezone, time
 from dateutil import parser
 from pathlib import Path
@@ -12,8 +12,14 @@ import config
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}})
 app.config.from_object(os.environ['APP_SETTINGS'])
-tables.db.init_app(app)
-ApTransactions = tables.ApTransactions
+
+db = psycopg2.connect(
+    host=config.Db.host,
+    user=config.Db.user,
+    password=config.Db.pw,
+    dbname=config.Db.name)
+
+cur = db.cursor()
 
 off_hours_start = time(6, 0, tzinfo=timezone.utc)
 off_hours_end = time(13, 0, tzinfo=timezone.utc)
@@ -28,17 +34,55 @@ def get_parking_spaces():
 def get_parking_occupancy():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = get_filters(params, datetime_range)
-    spaces = ApTransactions.query.with_entities(
-        ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
-        ).filter(*filters).order_by(ApTransactions.purchased_date).all()
+    #filters = get_filters(params, datetime_range)
+    start_time = str(datetime_range['start']).replace('+00:00', 'Z')
+    end_time = str(datetime_range['end']).replace('+00:00', 'Z')
+
+    where = "WHERE expiry_date > '" + start_time \
+        + "' AND purchased_date < '" + end_time + "'"
+
+    filter_spaces = get_filter_spaces(params)
+    if filter_spaces:
+        where += " AND stall IN (" \
+            + ','.join("'{0}'".format(s) for s in filter_spaces) \
+            + ")"
+
+    print("getting rows...")
+    print("SELECT stall, purchased_date, expiry_date FROM ap_transactions " \
+                + where + " ORDER BY ap_transactions.purchased_date;")
+
+    startTime = datetime.now()
+    cur.execute("SELECT stall, purchased_date, expiry_date FROM ap_transactions " \
+                + where + " ORDER BY ap_transactions.purchased_date;")
+
+    print("executed")
+
+    # spaces = cur.fetchall()
+    # print("got rows in " + str(datetime.now() - startTime))
+    # quit()
+
+
+    while True:
+        rows = cur.fetchmany(5000)
+        if not rows:
+            break
+
+        for row in rows:
+            # do something with row
+            pass
+
+    print("got rows in " + str(datetime.now() - startTime))
+    quit()
+    print("1")
     transactions = get_squashed_transactions(spaces, datetime_range)
+    print("2")
     time_intervals = get_time_intervals(datetime_range, True)
 
     heatmap = request.args.get('heatmap', default = False)
     if heatmap:
         return get_occupancy(transactions, datetime_range, params)
     else:
+        print("3")
         return get_bucketed_occupancy(transactions, time_intervals, params)
 
 @app.route('/parking-revenue', methods = ['POST'])
@@ -226,6 +270,7 @@ def get_occupancy(spaces, datetime_range, params):
 def get_bucketed_occupancy(spaces, time_intervals, params):
     bucketed_occupancy = [0] * (len(time_intervals) - 1)
 
+    print("4")
     for id, transactions in spaces.items():
         data = get_time_data(
             transactions[0]['start'], # first transaction
@@ -256,8 +301,10 @@ def get_bucketed_occupancy(spaces, time_intervals, params):
 
                 bucketed_occupancy[i] += get_time_occupied(i, data, time_intervals)
 
+    print("5")
     potential_occupancy = get_potential_occupancy_bucketed(params, time_intervals)
     del time_intervals[-1]
+    print("8")
 
     return jsonify({
         'data': [{
@@ -400,6 +447,7 @@ def get_potential_occupancy_bucketed(params, time_intervals):
         potential_occupancy[i] = space_count \
             * get_potential_occupancy(interval, time_intervals[i+1])
 
+    print("7")
     return potential_occupancy
 
 def get_potential_occupancy(start_time, end_time):
@@ -459,6 +507,19 @@ def get_bound_time_range(transaction, datetime_range):
 
 def seconds_to_hours(seconds):
     return round(seconds / 3600, 2)
+
+def get_filter_spaces(params):
+    if 'parking_spaces' in params:
+        if is_curbs(params['parking_spaces']):
+            spaces = []
+            for curb in params['parking_spaces']:
+                spaces += curb
+        else:
+            spaces = params['parking_spaces']
+
+        return spaces
+
+    return False
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0')
