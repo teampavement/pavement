@@ -49,15 +49,12 @@ def get_parking_revenue():
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.revenue
         ).filter(*filters).all()
-    time_intervals = get_time_intervals(datetime_range)
-    bucketed_revenue = get_bucketed_revenue(spaces, time_intervals)
 
-    return jsonify({
-        'data': [{
-            'timestamp': timestamp,
-            'value': bucketed_revenue[i],
-            } for i, timestamp in enumerate(time_intervals)]
-    })
+    sum = request.args.get('sum', default = False)
+    if sum:
+        return get_revenue(spaces, datetime_range)
+    else:
+        return get_bucketed_revenue(spaces, datetime_range)
 
 @app.route('/parking-time', methods = ['POST'])
 def get_parking_time():
@@ -266,20 +263,43 @@ def get_bucketed_occupancy(spaces, time_intervals, params):
             } for i, timestamp in enumerate(time_intervals)]
     })
 
-def get_bucketed_revenue(spaces, times):
-    bucketed_revenue = [0] * len(times)
+def get_revenue(spaces, datetime_range):
+    revenue_sum = {}
+
     for id, start_time, revenue in spaces:
         if (revenue is None
             or (start_time.timetz() >= off_hours_start
                 and start_time.timetz() < off_hours_end)):
             continue
 
-        start_index = bisect.bisect_left(times, start_time) - 1
+        if id not in revenue_sum:
+            revenue_sum[id] = revenue
+        else:
+            revenue_sum[id] += revenue
+
+    return jsonify(revenue_sum)
+
+def get_bucketed_revenue(spaces, datetime_range):
+    time_intervals = get_time_intervals(datetime_range)
+    bucketed_revenue = [0] * len(time_intervals)
+
+    for id, start_time, revenue in spaces:
+        if (revenue is None
+            or (start_time.timetz() >= off_hours_start
+                and start_time.timetz() < off_hours_end)):
+            continue
+
+        start_index = bisect.bisect_left(time_intervals, start_time) - 1
         if start_index < 0:
             continue
         bucketed_revenue[start_index] += revenue
 
-    return bucketed_revenue
+    return jsonify({
+        'data': [{
+            'timestamp': timestamp,
+            'value': bucketed_revenue[i],
+            } for i, timestamp in enumerate(time_intervals)]
+    })
 
 def get_times(spaces, datetime_range, params):
     times = {'data': []}
