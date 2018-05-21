@@ -49,3 +49,4 @@ class ApTransactions(Table, db.Model):
     transaction_fee = db.Column(db.DECIMAL(precision=10, scale=2))
     card_type = db.Column(db.VARCHAR(length=50))
     method = db.Column(db.VARCHAR(length=50))
+    parking_day = db.Column(db.SMALLINT)
