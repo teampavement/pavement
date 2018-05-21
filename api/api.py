@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import bisect, operator, os, sys
+import bisect, collections, operator, os, sys, pytz
 from datetime import datetime, timedelta, timezone, time
 from dateutil import parser
 from pathlib import Path
@@ -15,8 +15,19 @@ app.config.from_object(os.environ['APP_SETTINGS'])
 tables.db.init_app(app)
 ApTransactions = tables.ApTransactions
 
-off_hours_start = time(6, 0, tzinfo=timezone.utc)
-off_hours_end = time(13, 0, tzinfo=timezone.utc)
+days = { # todo: centralize somewhere else
+    'monday': 0,
+    'tuesday': 1,
+    'wednesday': 2,
+    'thursday': 3,
+    'friday': 4,
+    'saturday': 5,
+    'sunday': 6
+}
+
+midnight = time(4, 0, tzinfo=timezone.utc)
+off_hours_start = time(6, 0, tzinfo=timezone.utc) # 2am
+off_hours_end = time(13, 0, tzinfo=timezone.utc) # 9am
 cached_time = 0
 cached_interval = 0
 
@@ -28,48 +39,62 @@ def get_parking_spaces():
 def get_parking_occupancy():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = get_filters(params, datetime_range)
+    day = get_day()
+    filters = get_filters(params, datetime_range, False, day)
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
         ).filter(*filters).order_by(ApTransactions.purchased_date).all()
     transactions = get_squashed_transactions(spaces, datetime_range)
-    time_intervals = get_time_intervals(datetime_range, True)
+
+    if day is not False:
+        return get_occupancy_by_day(transactions, datetime_range, params, day)
 
     heatmap = request.args.get('heatmap', default = False)
     if heatmap:
         return get_occupancy(transactions, datetime_range, params)
     else:
+        time_intervals = get_time_intervals(datetime_range, True)
         return get_bucketed_occupancy(transactions, time_intervals, params)
 
 @app.route('/parking-revenue', methods = ['POST'])
 def get_parking_revenue():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = get_filters(params, datetime_range, True)
+    day = get_day()
+    filters = get_filters(params, datetime_range, True, day)
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.revenue
         ).filter(*filters).all()
+
+    if day is not False:
+        return get_revenue_by_day(spaces, datetime_range, day)
 
     sum = request.args.get('sum', default = False)
     if sum:
         return get_revenue(spaces, datetime_range)
     else:
-        return get_bucketed_revenue(spaces, datetime_range)
+        time_intervals = get_time_intervals(datetime_range)
+        return get_bucketed_revenue(spaces, time_intervals)
 
 @app.route('/parking-time', methods = ['POST'])
 def get_parking_time():
     params = get_params()
     datetime_range = get_datetime_range(params)
-    filters = get_filters(params, datetime_range, True)
+    day = get_day()
+    filters = get_filters(params, datetime_range, True, day)
     spaces = ApTransactions.query.with_entities(
         ApTransactions.stall, ApTransactions.purchased_date, ApTransactions.expiry_date
         ).filter(*filters).all()
+
+    if day is not False:
+        return get_times_by_day(spaces, datetime_range, day)
 
     heatmap = request.args.get('heatmap', default = False)
     if heatmap:
         return get_times(spaces, datetime_range, params)
     else:
-        return get_bucketed_times(spaces, datetime_range)
+        time_intervals = get_time_intervals(datetime_range)
+        return get_bucketed_times(spaces, time_intervals)
 
 def get_params():
     return {} if not request.data else request.get_json()
@@ -111,7 +136,7 @@ def get_squashed_transactions(spaces, datetime_range):
 
     return transactions
 
-def get_filters(params, datetime_range, only_check_start = False):
+def get_filters(params, datetime_range, only_check_start = False, day = False):
     if only_check_start:
         filters = [
             datetime_range['start'] <= ApTransactions.purchased_date,
@@ -133,23 +158,34 @@ def get_filters(params, datetime_range, only_check_start = False):
 
         filters.append(ApTransactions.stall.in_(spaces))
 
+    if day is not False:
+        filters.append(day == ApTransactions.parking_day)
+
     return filters
 
-def get_time_intervals(datetime_range, include_end = False):
-    time_diff = (datetime_range['end'] - datetime_range['start']).total_seconds()
-    if time_diff <= 259200: # 3 days
-        return generate_times(datetime_range, timedelta(hours=1), include_end)
-    elif time_diff > 259200 and time_diff <= 2678400: # 3-31 days
-        return generate_times(datetime_range, timedelta(days=1), include_end)
-    else:
-        return generate_times(datetime_range, timedelta(weeks=1), include_end)
+def get_time_intervals(datetime_range, include_end = False, time_delta = False, parking_day = False):
+    if not time_delta:
+        time_diff = (datetime_range['end'] - datetime_range['start']).total_seconds()
+        time_delta = get_time_delta(time_diff)
 
-def generate_times(datetime_range, delta, include_end):
+    return generate_times(datetime_range, time_delta, include_end, parking_day)
+
+def get_time_delta(time_diff):
+    if time_diff <= 259200: # 3 days
+        return timedelta(hours=1)
+    elif time_diff > 259200 and time_diff <= 2678400: # 3-31 days
+        return timedelta(days=1)
+    else:
+        return timedelta(weeks=1)
+
+def generate_times(datetime_range, delta, include_end, parking_day):
     times = []
     curr = datetime_range['start']
     op = operator.le if include_end else operator.lt
+
     while op(curr, datetime_range['end']):
-        if curr.timetz() >= off_hours_start and curr.timetz() < off_hours_end:
+        if ((curr.timetz() >= off_hours_start and curr.timetz() < off_hours_end)
+            or (parking_day is not False and not in_parking_day(curr, parking_day))):
             curr += delta
             continue
 
@@ -157,7 +193,10 @@ def generate_times(datetime_range, delta, include_end):
         curr += delta
 
     if (include_end and times[-1] != datetime_range['end']):
-        times.append(datetime_range['end'])
+        if parking_day is False:
+            times.append(datetime_range['end'])
+        else:
+            times.append(times[-1] + delta)
 
     return times
 
@@ -174,6 +213,27 @@ def get_bucketed_spaces(spaces, times):
             bucketed_spaces[i].add(id)
 
     return bucketed_spaces
+
+def get_occupancy_by_day(spaces, datetime_range, params, day):
+    time_intervals = get_time_intervals(datetime_range, True, timedelta(hours=1), day)
+    hour_occupancy = {}
+    occupancy = get_bucketed_occupancy(spaces, time_intervals, params, True)
+    days = 0
+    curr_date = None
+
+    for i, timestamp in enumerate(time_intervals):
+        timestamp = timestamp.astimezone(pytz.timezone('America/New_York'))
+        if timestamp.weekday() == day and curr_date != timestamp.date():
+            days += 1
+
+        curr_date = timestamp.date()
+        hour = timestamp.timetz()
+        if hour not in hour_occupancy:
+            hour_occupancy[hour] = occupancy['bucketed'][i] / occupancy['potential'][i]
+        else:
+            hour_occupancy[hour] += occupancy['bucketed'][i] / occupancy['potential'][i]
+
+    return jsonify(get_ordered_results(hour_occupancy, days))
 
 def get_occupancy(spaces, datetime_range, params):
     occupancy = {'data': []}
@@ -220,7 +280,7 @@ def get_occupancy(spaces, datetime_range, params):
 
     return jsonify(occupancy)
 
-def get_bucketed_occupancy(spaces, time_intervals, params):
+def get_bucketed_occupancy(spaces, time_intervals, params, return_raw = False):
     bucketed_occupancy = [0] * (len(time_intervals) - 1)
 
     for id, transactions in spaces.items():
@@ -256,12 +316,39 @@ def get_bucketed_occupancy(spaces, time_intervals, params):
     potential_occupancy = get_potential_occupancy_bucketed(params, time_intervals)
     del time_intervals[-1]
 
+    if return_raw:
+        return {
+            'bucketed': bucketed_occupancy,
+            'potential': potential_occupancy
+        }
+
     return jsonify({
         'data': [{
             'timestamp': timestamp,
             'value': round(bucketed_occupancy[i] / potential_occupancy[i], 2),
             } for i, timestamp in enumerate(time_intervals)]
     })
+
+def get_revenue_by_day(spaces, datetime_range, day):
+    time_intervals = get_time_intervals(datetime_range, False, timedelta(hours=1), day)
+    hour_revenue = {}
+    bucketed_revenue = get_bucketed_revenue(spaces, time_intervals, True)
+    days = 0
+    curr_date = None
+
+    for i, timestamp in enumerate(time_intervals):
+        timestamp = timestamp.astimezone(pytz.timezone('America/New_York'))
+        if timestamp.weekday() == day and curr_date != timestamp.date():
+            days += 1
+
+        curr_date = timestamp.date()
+        hour = timestamp.timetz()
+        if hour not in hour_revenue:
+            hour_revenue[hour] = bucketed_revenue[i]
+        else:
+            hour_revenue[hour] += bucketed_revenue[i]
+
+    return jsonify(get_ordered_results(hour_revenue, days))
 
 def get_revenue(spaces, datetime_range):
     revenue_sum = {}
@@ -279,8 +366,7 @@ def get_revenue(spaces, datetime_range):
 
     return jsonify(revenue_sum)
 
-def get_bucketed_revenue(spaces, datetime_range):
-    time_intervals = get_time_intervals(datetime_range)
+def get_bucketed_revenue(spaces, time_intervals, return_raw = False):
     bucketed_revenue = [0] * len(time_intervals)
 
     for id, start_time, revenue in spaces:
@@ -294,12 +380,36 @@ def get_bucketed_revenue(spaces, datetime_range):
             continue
         bucketed_revenue[start_index] += revenue
 
+    if return_raw:
+        return bucketed_revenue
+
     return jsonify({
         'data': [{
             'timestamp': timestamp,
             'value': bucketed_revenue[i],
             } for i, timestamp in enumerate(time_intervals)]
     })
+
+def get_times_by_day(spaces, datetime_range, day):
+    time_intervals = get_time_intervals(datetime_range, False, timedelta(hours=1), day)
+    hour_times = {}
+    bucketed = get_bucketed_times(spaces, time_intervals, True)
+    days = 0
+    curr_date = None
+
+    for i, timestamp in enumerate(time_intervals):
+        timestamp = timestamp.astimezone(pytz.timezone('America/New_York'))
+        if timestamp.weekday() == day and curr_date != timestamp.date():
+            days += 1
+
+        curr_date = timestamp.date()
+        hour = timestamp.timetz()
+        if hour not in hour_times:
+            hour_times[hour] = seconds_to_hours(bucketed['times'][i] / bucketed['spaces'][i])
+        else:
+            hour_times[hour] += seconds_to_hours(bucketed['times'][i] / bucketed['spaces'][i])
+
+    return jsonify(get_ordered_results(hour_times, days))
 
 def get_times(spaces, datetime_range, params):
     times = {'data': []}
@@ -349,8 +459,7 @@ def get_times(spaces, datetime_range, params):
 
     return jsonify(times)
 
-def get_bucketed_times(spaces, datetime_range):
-    time_intervals = get_time_intervals(datetime_range)
+def get_bucketed_times(spaces, time_intervals, return_raw = False):
     bucketed_times = [0] * (len(time_intervals))
     bucketed_spaces = [0] * (len(time_intervals))
 
@@ -371,12 +480,30 @@ def get_bucketed_times(spaces, datetime_range):
         if space == 0:
             bucketed_spaces[i] += 1
 
+    if return_raw:
+        return {
+            'times': bucketed_times,
+            'spaces': bucketed_spaces
+        }
+
     return jsonify({
         'data': [{
             'timestamp': timestamp,
             'value': seconds_to_hours(bucketed_times[i] / bucketed_spaces[i]),
         } for i, timestamp in enumerate(time_intervals)]
     })
+
+def get_ordered_results(results, days):
+    ordered_results = collections.OrderedDict(sorted(results.items()))
+    results_by_day = {'data': []}
+    for hour, value in ordered_results.items():
+        avg_value = round(value / days, 2)
+        first_hour = format_hour(hour)
+        next_hour = format_hour(get_next_hour(hour))
+        timestamp = first_hour + '-' + next_hour
+        results_by_day['data'].append({'timestamp': timestamp, 'value': avg_value})
+
+    return rearrange_times(results_by_day)
 
 def get_time_data(start_time, end_time, times):
     start_index = bisect.bisect_left(times, start_time) - 1
@@ -479,6 +606,39 @@ def get_bound_time_range(transaction, datetime_range):
 
 def seconds_to_hours(seconds):
     return round(seconds / 3600, 2)
+
+def in_parking_day(dt, parking_day):
+    day = dt.astimezone(pytz.timezone('America/New_York')).weekday()
+    if dt.timetz() >= midnight and dt.timetz() < off_hours_start:
+        day = 6 if day == 0 else day - 1
+
+    return day == parking_day
+
+def get_day():
+    day = request.args.get('day', default = False)
+
+    if day and day.lower() in days:
+        return days[day.lower()]
+
+    return False
+
+def get_next_hour(hour):
+    return (datetime(1, 1, 1, hour.hour, hour.minute, hour.second) \
+            + timedelta(hours=1)).time()
+
+def rearrange_times(result):
+    data = result['data']
+
+    if data[0]['timestamp'] == '12:00AM-1:00AM' and len(data) > 2:
+        data = data[1:] + [data[0]]
+    if data[0]['timestamp'] == '1:00AM-2:00AM' and len(data) > 2:
+        data = data[1:] + [data[0]]
+
+    result['data'] = data
+    return result
+
+def format_hour(hour):
+    return hour.strftime('%I:%M%p').lstrip('0')
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0')
