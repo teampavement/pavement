@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-import config, csv, glob, re, psycopg2
-from datetime import datetime
+import config, csv, glob, re, psycopg2, pytz
+from datetime import datetime, timezone, time
 from dateutil import parser
-from pytz import timezone
 
 ticket = 0
 pay_station = 1
@@ -33,6 +32,18 @@ validation_revenue = 25
 transaction_fee = 26
 card_type = 27
 method = 28
+parking_day = 29
+
+monday = 0
+tuesday = 1
+wednesday = 2
+thursday = 3
+friday = 4
+saturday = 5
+sunday = 6
+
+after_hours_start = time(4, 0, tzinfo=timezone.utc) # 12am
+after_hours_end = time(13, 0, tzinfo=timezone.utc) # 9am
 
 def main():
     db = psycopg2.connect(
@@ -66,6 +77,7 @@ def parse_2016(db):
                 row = strip_currencies(row, 9, 15)
                 row.extend([None] * 7)
                 row.append('its')
+                row.append(get_parking_day(row[purchased_date]))
 
                 cursor.execute("""INSERT INTO ap_transactions
                         (ticket, pay_station, stall, license_plate,
@@ -76,10 +88,10 @@ def parse_2016(db):
                         new_revenue_weekday, new_rate_weekend,
                         new_revenue_weekend, passport_tran, merchant_tran,
                         parker_id, conv_revenue, validation_revenue,
-                        transaction_fee, card_type, method)
+                        transaction_fee, card_type, method, parking_day)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s)""",
+                        %s, %s, %s, %s)""",
                         row)
 
     db.commit()
@@ -91,7 +103,7 @@ def parse_2017(db):
     parse_its_2017(db, '2017_ITS*.csv')
 
 def parse_2018(db):
-    #parse_app(db, '2018_App_Transaction_Report_Jan-April.csv')
+    parse_app(db, '2018_App_Transaction_Report_Jan-April.csv')
     parse_ips(db, 'IPS_Transactions_Jan-Apr2018.csv')
     parse_its_2018(db, '2017_ITS*.csv')
 
@@ -104,7 +116,7 @@ def parse_app(db, file):
         next(reader)
         for row in reader:
             row = strip_currencies(row, 10, 15)
-            dbRow = [None] * 29
+            dbRow = [None] * 30
             dbRow[passport_tran] = row[1]
             dbRow[merchant_tran] = row[2]
             dbRow[parker_id] = row[3]
@@ -120,6 +132,7 @@ def parse_app(db, file):
             dbRow[payment_type] = row[15]
             dbRow[card_type] = row[16]
             dbRow[method] = 'app'
+            dbRow[parking_day] = get_parking_day(dbRow[purchased_date])
 
             cursor.execute("""INSERT INTO ap_transactions
                     (ticket, pay_station, stall, license_plate, purchased_date,
@@ -129,10 +142,10 @@ def parse_app(db, file):
                     new_rate_weekday, new_revenue_weekday, new_rate_weekend,
                     new_revenue_weekend, passport_tran, merchant_tran,
                     parker_id, conv_revenue, validation_revenue,
-                    transaction_fee, card_type, method)
+                    transaction_fee, card_type, method, parking_day)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s)""",
+                    %s, %s)""",
                     dbRow)
 
     db.commit()
@@ -146,7 +159,7 @@ def parse_ips(db, file):
         reader = csv.reader(f)
         next(reader)
         for row in reader:
-            dbRow = [None] * 29
+            dbRow = [None] * 30
             dbRow[zone] = row[2]
             dbRow[pay_station] = row[5]
             dbRow[stall] = row[7]
@@ -157,6 +170,7 @@ def parse_ips(db, file):
             dbRow[expiry_date] = get_date_time(row[13])
             dbRow[revenue] = row[22]
             dbRow[method] = 'ips'
+            dbRow[parking_day] = get_parking_day(dbRow[purchased_date])
 
             cursor.execute("""INSERT INTO ap_transactions
                     (ticket, pay_station, stall, license_plate, purchased_date,
@@ -166,10 +180,10 @@ def parse_ips(db, file):
                     new_rate_weekday, new_revenue_weekday, new_rate_weekend,
                     new_revenue_weekend, passport_tran, merchant_tran,
                     parker_id, conv_revenue, validation_revenue,
-                    transaction_fee, card_type, method)
+                    transaction_fee, card_type, method, parking_day)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s)""",
+                    %s, %s)""",
                     dbRow)
 
     db.commit()
@@ -198,6 +212,7 @@ def parse_its(db, file):
             row[13], row[14]]
             dbRow.extend([None] * 13)
             dbRow.append('its')
+            dbRow.append(get_parking_day(purchased))
 
             cursor.execute("""INSERT INTO ap_transactions
                     (ticket, pay_station, stall, license_plate,
@@ -208,10 +223,10 @@ def parse_its(db, file):
                     new_revenue_weekday, new_rate_weekend,
                     new_revenue_weekend, passport_tran, merchant_tran,
                     parker_id, conv_revenue, validation_revenue,
-                    transaction_fee, card_type, method)
+                    transaction_fee, card_type, method, parking_day)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s)""",
+                    %s, %s, %s, %s)""",
                     dbRow)
 
     db.commit()
@@ -219,7 +234,7 @@ def parse_its(db, file):
 
 def get_date_time(val):
     if val:
-        val = timezone('America/New_York').localize(parser.parse(val, ignoretz=True))
+        val = pytz.timezone('America/New_York').localize(parser.parse(val, ignoretz=True))
 
     return val
 
@@ -244,6 +259,24 @@ def strip_currencies(row, start, end):
         row[i] = row[i].strip('$')
 
     return row
+
+def get_parking_day(purchased_date):
+    day = purchased_date.weekday()
+
+    if is_after_hours(purchased_date):
+        return shift_day_back(day)
+    else:
+        return day
+
+def is_after_hours(purchased_date):
+    return purchased_date.astimezone(pytz.utc).timetz() >= after_hours_start \
+        and purchased_date.astimezone(pytz.utc).timetz() < after_hours_start
+
+def shift_day_back(day):
+    if day == monday:
+        return sunday
+    else:
+        return day - 1
 
 if __name__ == '__main__':
     main()
